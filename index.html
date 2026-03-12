@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>馬力歐大逃亡 (終極版)</title>
+    <title>馬力歐大逃亡 (全球排行榜)</title>
     <style>
         body {
             margin: 0;
@@ -11,12 +11,20 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            height: 100vh;
+            justify-content: flex-start; /* 改為靠上對齊，讓下方有空間放排行榜 */
+            min-height: 100vh;
             background-color: #87CEEB;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            touch-action: none;
+            overflow-y: auto; /* 允許上下捲動以查看排行榜 */
+            touch-action: pan-y; /* 允許手機上下滑動網頁 */
+        }
+        .game-container {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            max-width: 800px;
         }
         #gameCanvas {
             background-color: #FFF8DC;
@@ -24,12 +32,12 @@
             border-radius: 10px;
             box-shadow: 0 10px 20px rgba(0,0,0,0.1);
             width: 100%;
-            max-width: 800px;
             height: auto; 
             aspect-ratio: 800 / 250;
+            touch-action: none; /* 遊戲區域內禁止滑動，專心判定觸控 */
         }
         .instructions {
-            margin-top: 15px;
+            margin-top: 10px;
             color: #5c3a21;
             text-align: center;
             padding: 0 10px;
@@ -47,41 +55,149 @@
             padding: 2px 4px;
             white-space: nowrap;
         }
+        /* 排行榜 UI 設計 */
+        .leaderboard-container {
+            margin-top: 15px;
+            margin-bottom: 30px;
+            width: 90%;
+            max-width: 400px;
+            background-color: #2c3e50;
+            border: 4px solid #f1c40f;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            color: white;
+            padding: 15px;
+        }
+        .leaderboard-title {
+            text-align: center;
+            color: #f1c40f;
+            margin: 0 0 10px 0;
+            font-size: 1.5em;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .leaderboard-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .leaderboard-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 10px;
+            margin-bottom: 5px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            font-size: 1.1em;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: bold;
+        }
+        .rank-1 { color: #f1c40f; font-size: 1.2em; background-color: rgba(241, 196, 15, 0.2); }
+        .rank-2 { color: #bdc3c7; }
+        .rank-3 { color: #cd7f32; }
     </style>
+    
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-database-compat.js"></script>
 </head>
 <body>
 
-    <canvas id="gameCanvas" width="800" height="250"></canvas>
-    
-    <div class="instructions">
-        <h2>馬力歐大逃亡</h2>
-        <p>💻 電腦：按 <kbd>空白鍵</kbd> 跳躍，<kbd>↓</kbd> 下蹲</p>
-        <p>📱 手機：**點擊螢幕** 跳躍，**向下滑動** 下蹲</p>
-        <p style="font-size: 0.8em; color: #8B4513;">(提示：點擊第一次畫面後才會解鎖音效喔！)</p>
+    <div class="game-container">
+        <canvas id="gameCanvas" width="800" height="250"></canvas>
+        
+        <div class="instructions">
+            <p>💻 電腦：<kbd>空白鍵</kbd> 跳躍，<kbd>↓</kbd> 下蹲</p>
+            <p>📱 手機：**點擊畫布** 跳躍，**畫布內向下滑動** 下蹲</p>
+        </div>
+
+        <div class="leaderboard-container">
+            <h3 class="leaderboard-title">🌍 全球排行榜 TOP 5</h3>
+            <ul class="leaderboard-list" id="leaderboardList">
+                <li class="leaderboard-item">載入中...</li>
+            </ul>
+        </div>
     </div>
 
     <script>
+        // --- 1. Firebase 初始化與資料庫連線 ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBMa2OgrNTZhTXn-pOLJTz6a0rCxMYShPA",
+            authDomain: "dino-3ebdd.firebaseapp.com",
+            databaseURL: "https://dino-3ebdd-default-rtdb.firebaseio.com",
+            projectId: "dino-3ebdd",
+            storageBucket: "dino-3ebdd.firebasestorage.app",
+            messagingSenderId: "366648298115",
+            appId: "1:366648298115:web:1b47583b1fbc4a457ee9b6"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        
+        const playCountRef = db.ref('globalPlayCount');
+        const leaderboardRef = db.ref('leaderboard');
+        
+        let globalPlayCount = 0;
+        let topScores = []; // 儲存排行榜資料
+
+        // 監聽遊玩次數
+        playCountRef.on('value', (snapshot) => {
+            globalPlayCount = snapshot.val() || 0;
+        });
+
+        function incrementGlobalPlayCount() {
+            playCountRef.transaction((currentCount) => {
+                return (currentCount || 0) + 1;
+            });
+        }
+
+        // 監聽排行榜資料 (只抓取分數最高的 5 筆)
+        leaderboardRef.orderByChild('score').limitToLast(5).on('value', (snapshot) => {
+            let tempScores = [];
+            snapshot.forEach((childSnapshot) => {
+                tempScores.push(childSnapshot.val());
+            });
+            // Firebase 預設是從小排到大，所以我們要反轉陣列變成由大到小
+            topScores = tempScores.reverse();
+            updateLeaderboardUI();
+        });
+
+        // 更新 HTML 上的排行榜
+        function updateLeaderboardUI() {
+            const listElement = document.getElementById('leaderboardList');
+            listElement.innerHTML = ''; // 清空列表
+
+            if (topScores.length === 0) {
+                listElement.innerHTML = '<li class="leaderboard-item">目前還沒有人上榜，快來搶頭香！</li>';
+                return;
+            }
+
+            topScores.forEach((entry, index) => {
+                const li = document.createElement('li');
+                li.className = 'leaderboard-item';
+                if (index === 0) li.classList.add('rank-1');
+                if (index === 1) li.classList.add('rank-2');
+                if (index === 2) li.classList.add('rank-3');
+                
+                let rankIcon = ['🥇', '🥈', '🥉', '４', '５'][index] || (index + 1);
+                li.innerHTML = `<span>${rankIcon} ${entry.name}</span> <span>${entry.score} 分</span>`;
+                listElement.appendChild(li);
+            });
+        }
+
+        // --- 2. 遊戲音效與核心設定 ---
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
 
-        // --- 音效系統 (Web Audio API) ---
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContext();
 
         function playSound(type) {
-            // 瀏覽器安全機制：必須在使用者互動後才能播放聲音
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-            
+            if (audioCtx.state === 'suspended') audioCtx.resume();
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
-            
             oscillator.connect(gainNode);
             gainNode.connect(audioCtx.destination);
             
             if (type === 'jump') {
-                // 跳躍音效：短促的頻率上升 (方波)
                 oscillator.type = 'square';
                 oscillator.frequency.setValueAtTime(150, audioCtx.currentTime);
                 oscillator.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
@@ -90,7 +206,6 @@
                 oscillator.start();
                 oscillator.stop(audioCtx.currentTime + 0.1);
             } else if (type === 'hit') {
-                // 撞擊音效：低沉的頻率下降 (鋸齒波)
                 oscillator.type = 'sawtooth';
                 oscillator.frequency.setValueAtTime(100, audioCtx.currentTime);
                 oscillator.frequency.exponentialRampToValueAtTime(50, audioCtx.currentTime + 0.2);
@@ -101,47 +216,24 @@
             }
         }
 
-        // --- 遊戲核心變數 ---
         let score = 0;
-        let highScore = localStorage.getItem('marioHighScore') || 0; // 讀取最高分
         let gameSpeed = 5;
         let isGameOver = false;
         let frameCount = 0;
         let obstacles = [];
         const groundY = 200; 
 
-        // 馬力歐像素陣列
         const marioSprite = [
-            "   RRRRR    ",
-            "  RRRRRRRRR ",
-            "  BBBSBS    ",
-            " BSBSBBSBSSS",
-            " BSBSBBBSBSS",
-            " BBSBBBB    ",
-            "   SSSSSSS  ",
-            "  BBRUURBB  ",
-            " BBBRUURBBB ",
-            "BBBBURRUBBBB",
-            "SS BBUUBB SS",
-            "SSS UUUU SSS",
-            "SS UUUUUU SS",
-            "   UU  UU   ",
-            "  BBB  BBB  ",
-            " BBBB  BBBB "
+            "   RRRRR    ", "  RRRRRRRRR ", "  BBBSBS    ", " BSBSBBSBSSS",
+            " BSBSBBBSBSS", " BBSBBBB    ", "   SSSSSSS  ", "  BBRUURBB  ",
+            " BBBRUURBBB ", "BBBBURRUBBBB", "SS BBUUBB SS", "SSS UUUU SSS",
+            "SS UUUUUU SS", "   UU  UU   ", "  BBB  BBB  ", " BBBB  BBBB "
         ];
         const pixelSize = 3; 
 
-        // 主角：馬力歐
         const mario = {
-            x: 80,
-            y: groundY,
-            width: 12 * pixelSize,  
-            height: 16 * pixelSize, 
-            dy: 0,
-            gravity: 0.6,
-            jumpForce: -11,
-            isDucking: false,
-            
+            x: 80, y: groundY, width: 36, height: 48, dy: 0,
+            gravity: 0.6, jumpForce: -11, isDucking: false,
             draw() {
                 ctx.save();
                 if (this.isDucking) {
@@ -149,7 +241,6 @@
                     ctx.scale(1, 0.5); 
                     ctx.translate(-this.x, -this.y);
                 }
-
                 for (let r = 0; r < marioSprite.length; r++) {
                     for (let c = 0; c < marioSprite[r].length; c++) {
                         let char = marioSprite[r][c];
@@ -160,92 +251,46 @@
                                 case 'S': ctx.fillStyle = '#fcae68'; break; 
                                 case 'U': ctx.fillStyle = '#004394'; break; 
                             }
-                            let pX = this.x + c * pixelSize;
-                            let pY = this.y - this.height + r * pixelSize;
-                            ctx.fillRect(pX, pY, pixelSize, pixelSize);
+                            ctx.fillRect(this.x + c * pixelSize, this.y - this.height + r * pixelSize, pixelSize, pixelSize);
                         }
                     }
                 }
                 ctx.restore();
             },
-            
             update() {
                 this.y += this.dy;
-                if (this.y + this.dy < groundY) {
-                    this.dy += this.gravity;
-                } else {
-                    this.dy = 0;
-                    this.y = groundY;
-                }
+                if (this.y + this.dy < groundY) this.dy += this.gravity;
+                else { this.dy = 0; this.y = groundY; }
             },
-            
             jump() {
                 if (this.y === groundY && !this.isDucking) {
-                    this.dy = this.jumpForce;
-                    playSound('jump'); // 播放跳躍音效
+                    this.dy = this.jumpForce; playSound('jump');
                 }
             }
         };
 
-        // 障礙物類別
         class Obstacle {
             constructor(type) {
-                this.x = canvas.width;
-                this.type = type; 
-                this.markedForDeletion = false;
-                
+                this.x = canvas.width; this.type = type; this.markedForDeletion = false;
                 if (this.type === 'pipe') {
-                    this.width = 40 + Math.random() * 20; 
-                    this.height = 30 + Math.random() * 20; 
-                    this.y = groundY - this.height;
+                    this.width = 40 + Math.random() * 20; this.height = 30 + Math.random() * 20; this.y = groundY - this.height;
                 } else {
-                    this.width = 50;  
-                    this.height = 25; 
-                    this.y = groundY - 50; 
+                    this.width = 50; this.height = 25; this.y = groundY - 50; 
                 }
             }
-            
             update() {
-                this.x -= gameSpeed;
-                if (this.x + this.width < 0) this.markedForDeletion = true;
+                this.x -= gameSpeed; if (this.x + this.width < 0) this.markedForDeletion = true;
             }
-            
             draw() {
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 1;
-
+                ctx.strokeStyle = '#000000'; ctx.lineWidth = 1;
                 if (this.type === 'pipe') {
-                    const pipeColorDark = '#006400'; 
-                    const pipeColorLight = '#228B22'; 
-                    const pipeLipHeight = 10;
-                    const pipeLipWidthOffset = 5;
-
-                    ctx.fillStyle = pipeColorDark;
-                    ctx.fillRect(this.x, this.y + pipeLipHeight, this.width, this.height - pipeLipHeight);
-                    ctx.strokeRect(this.x, this.y + pipeLipHeight, this.width, this.height - pipeLipHeight);
-
-                    ctx.fillStyle = pipeColorLight;
-                    ctx.fillRect(this.x - pipeLipWidthOffset, this.y, this.width + pipeLipWidthOffset * 2, pipeLipHeight);
-                    ctx.strokeRect(this.x - pipeLipWidthOffset, this.y, this.width + pipeLipWidthOffset * 2, pipeLipHeight);
+                    ctx.fillStyle = '#006400'; ctx.fillRect(this.x, this.y + 10, this.width, this.height - 10); ctx.strokeRect(this.x, this.y + 10, this.width, this.height - 10);
+                    ctx.fillStyle = '#228B22'; ctx.fillRect(this.x - 5, this.y, this.width + 10, 10); ctx.strokeRect(this.x - 5, this.y, this.width + 10, 10);
                 } else if (this.type === 'bulletbill') {
-                    const bulletColor = '#000000';
-                    const bulletOutline = '#333333';
-
-                    ctx.fillStyle = bulletColor;
-                    ctx.fillRect(this.x, this.y, this.width, this.height);
-                    ctx.strokeStyle = bulletOutline;
-                    ctx.strokeRect(this.x, this.y, this.width, this.height);
-
-                    ctx.fillStyle = '#FFFFFF';
-                    ctx.beginPath();
-                    ctx.arc(this.x + this.width * 0.25, this.y + this.height * 0.4, 4, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.beginPath();
-                    ctx.arc(this.x + this.width * 0.4, this.y + this.height * 0.4, 4, 0, Math.PI * 2);
-                    ctx.fill();
-
-                    ctx.fillStyle = '#FF0000';
-                    ctx.fillRect(this.x + this.width * 0.3, this.y + this.height * 0.65, this.width * 0.2, 3);
+                    ctx.fillStyle = '#000000'; ctx.fillRect(this.x, this.y, this.width, this.height); ctx.strokeRect(this.x, this.y, this.width, this.height);
+                    ctx.fillStyle = '#FFFFFF'; ctx.beginPath(); ctx.arc(this.x + this.width * 0.25, this.y + this.height * 0.4, 4, 0, Math.PI * 2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(this.x + this.width * 0.4, this.y + this.height * 0.4, 4, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = '#FF0000'; ctx.fillRect(this.x + this.width * 0.3, this.y + this.height * 0.65, this.width * 0.2, 3);
                 }
             }
         }
@@ -257,172 +302,125 @@
                      obstacles.push(new Obstacle(type));
                 }
             }
-
             for (let i = 0; i < obstacles.length; i++) {
-                obstacles[i].update();
-                obstacles[i].draw();
-
-                let mBox = {
-                    x: mario.x,
-                    y: mario.isDucking ? mario.y - (mario.height / 2) : mario.y - mario.height,
-                    width: mario.width,
-                    height: mario.isDucking ? mario.height / 2 : mario.height
-                };
-                
-                let obsBox = {
-                    x: obstacles[i].x,
-                    y: obstacles[i].y,
-                    width: obstacles[i].width,
-                    height: obstacles[i].height
-                };
+                obstacles[i].update(); obstacles[i].draw();
+                let mBox = { x: mario.x, y: mario.isDucking ? mario.y - (mario.height / 2) : mario.y - mario.height, width: mario.width, height: mario.isDucking ? mario.height / 2 : mario.height };
+                let obsBox = { x: obstacles[i].x, y: obstacles[i].y, width: obstacles[i].width, height: obstacles[i].height };
 
                 // 發生碰撞
-                if (mBox.x < obsBox.x + obsBox.width &&
-                    mBox.x + mBox.width > obsBox.x &&
-                    mBox.y < obsBox.y + obsBox.height &&
-                    mBox.y + mBox.height > obsBox.y) {
-                    
+                if (mBox.x < obsBox.x + obsBox.width && mBox.x + mBox.width > obsBox.x && mBox.y < obsBox.y + obsBox.height && mBox.y + mBox.height > obsBox.y) {
                     if (!isGameOver) {
-                        playSound('hit'); // 播放撞擊音效
+                        playSound('hit'); 
                         isGameOver = true;
-                        
-                        // 結算最高分
-                        let finalScore = Math.floor(score);
-                        if (finalScore > highScore) {
-                            highScore = finalScore;
-                            localStorage.setItem('marioHighScore', highScore);
-                        }
+                        handleGameOver(); // 處理結束與排行榜邏輯
                     }
                 }
             }
-            
             obstacles = obstacles.filter(obs => !obs.markedForDeletion);
+        }
+
+        // 處理遊戲結束與排行榜上傳
+        function handleGameOver() {
+            let finalScore = Math.floor(score);
+            
+            // 判斷是否有資格進入前五名
+            let isTop5 = false;
+            if (topScores.length < 5) {
+                isTop5 = true; // 名額沒滿，直接進榜
+            } else if (finalScore > topScores[topScores.length - 1].score) {
+                isTop5 = true; // 分數比第五名高，擠下他
+            }
+
+            // 延遲一點點時間再跳出輸入框，確保結束畫面有被畫出來
+            if (isTop5 && finalScore > 0) {
+                setTimeout(() => {
+                    let playerName = prompt(`🎉 太神啦！${finalScore} 分！\n你擠進了全球前五名！請輸入你的大名留念（最多 8 個字）：`, "匿名玩家");
+                    
+                    if (playerName) {
+                        // 限制名字長度，防止版面壞掉
+                        playerName = playerName.trim().substring(0, 8);
+                        if(playerName === "") playerName = "無名氏";
+                        
+                        // 將新紀錄推送到 Firebase
+                        leaderboardRef.push({
+                            name: playerName,
+                            score: finalScore
+                        });
+                    }
+                }, 100); 
+            }
         }
 
         function drawBackground() {
             const blockSize = 20;
-            const numBlocks = Math.ceil(canvas.width / blockSize);
-            for (let i = 0; i < numBlocks; i++) {
+            for (let i = 0; i < Math.ceil(canvas.width / blockSize); i++) {
                 const x = i * blockSize;
-                ctx.fillStyle = '#D2691E';
-                ctx.fillRect(x, groundY, blockSize, blockSize);
-                ctx.fillStyle = '#CD853F';
-                ctx.fillRect(x + 2, groundY + 2, blockSize - 4, blockSize - 4);
-                ctx.fillStyle = '#8B4513';
-                ctx.fillRect(x + 4, groundY + 4, blockSize - 8, blockSize - 8);
+                ctx.fillStyle = '#D2691E'; ctx.fillRect(x, groundY, blockSize, blockSize);
+                ctx.fillStyle = '#CD853F'; ctx.fillRect(x + 2, groundY + 2, blockSize - 4, blockSize - 4);
+                ctx.fillStyle = '#8B4513'; ctx.fillRect(x + 4, groundY + 4, blockSize - 8, blockSize - 8);
             }
             
-            // 繪製分數與最高分
-            ctx.fillStyle = '#5c3a21';
-            ctx.font = 'bold 20px Arial';
-            ctx.textAlign = 'right';
-            ctx.fillText(`最高分: ${highScore}   目前分數: ${Math.floor(score)}`, canvas.width - 20, 30);
+            ctx.fillStyle = '#5c3a21'; ctx.font = 'bold 20px Arial'; ctx.textAlign = 'right';
+            ctx.fillText(`目前分數: ${Math.floor(score)}`, canvas.width - 20, 30);
+            
+            ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 16px Arial'; ctx.textAlign = 'right';
+            ctx.fillText(`全球遊玩總計: ${globalPlayCount} 次`, canvas.width - 20, canvas.height - 15);
         }
 
         function animate() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            drawBackground();
-            mario.update();
-            mario.draw();
-            handleObstacles();
+            drawBackground(); mario.update(); mario.draw(); handleObstacles();
             
             if (!isGameOver) {
-                score += 0.1;
-                gameSpeed = 5 + Math.floor(score / 50); 
-                frameCount++;
-                requestAnimationFrame(animate);
+                score += 0.1; gameSpeed = 5 + Math.floor(score / 50); frameCount++; requestAnimationFrame(animate);
             } else {
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = 'white';
-                ctx.font = '30px Arial';
-                ctx.textAlign = 'center';
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white'; ctx.font = '30px Arial'; ctx.textAlign = 'center';
                 ctx.fillText('遊戲結束！', canvas.width / 2, canvas.height / 2 - 20);
-                
-                // 如果打破紀錄給予提示
-                if (Math.floor(score) >= highScore && Math.floor(score) > 0) {
-                    ctx.fillStyle = '#FFD700'; // 金色
-                    ctx.fillText('🎉 新紀錄！ 🎉', canvas.width / 2, canvas.height / 2 + 20);
-                } else {
-                    ctx.font = '20px Arial';
-                    ctx.fillText(`最終分數: ${Math.floor(score)}`, canvas.width / 2, canvas.height / 2 + 20);
-                }
-                
-                ctx.fillStyle = 'white';
-                ctx.font = '20px Arial';
-                ctx.fillText('點擊螢幕 或 按空白鍵 重新開始', canvas.width / 2, canvas.height / 2 + 60);
+                ctx.font = '20px Arial'; ctx.fillText(`最終分數: ${Math.floor(score)}`, canvas.width / 2, canvas.height / 2 + 20);
+                ctx.fillText('點擊畫布 或 按空白鍵 重新開始', canvas.width / 2, canvas.height / 2 + 60);
             }
         }
 
         function resetGame() {
-            score = 0;
-            gameSpeed = 5;
-            frameCount = 0;
-            obstacles = [];
-            isGameOver = false;
-            mario.y = groundY;
-            mario.dy = 0;
-            mario.isDucking = false;
+            incrementGlobalPlayCount(); 
+            score = 0; gameSpeed = 5; frameCount = 0; obstacles = [];
+            isGameOver = false; mario.y = groundY; mario.dy = 0; mario.isDucking = false;
             animate();
         }
 
-        // --- 電腦版控制 ---
+        // --- 控制與事件監聽 ---
         window.addEventListener('keydown', (e) => {
-            // 確保音效解鎖
             if (audioCtx.state === 'suspended') audioCtx.resume();
-
             if (e.code === 'Space' || e.code === 'ArrowUp') {
-                if (isGameOver) resetGame();
-                else mario.jump();
+                if (isGameOver) resetGame(); else mario.jump();
                 if(e.code === 'Space') e.preventDefault(); 
             }
-            if (e.code === 'ArrowDown' && !isGameOver) {
-                mario.isDucking = true;
-                e.preventDefault();
-            }
+            if (e.code === 'ArrowDown' && !isGameOver) { mario.isDucking = true; e.preventDefault(); }
         });
+        window.addEventListener('keyup', (e) => { if (e.code === 'ArrowDown') mario.isDucking = false; });
 
-        window.addEventListener('keyup', (e) => {
-            if (e.code === 'ArrowDown') mario.isDucking = false;
-        });
-
-        // --- 手機版觸控控制 ---
-        let touchStartY = 0;
-        let isSwiping = false;
-
-        window.addEventListener('touchstart', (e) => {
-            // 確保音效解鎖
+        // 修改觸控判定：只有點擊 canvas 才會觸發跳躍，避免滑動看排行榜時誤觸
+        let touchStartY = 0; let isSwiping = false;
+        canvas.addEventListener('touchstart', (e) => {
             if (audioCtx.state === 'suspended') audioCtx.resume();
-
-            if (isGameOver) {
-                resetGame();
-                return;
-            }
-            touchStartY = e.touches[0].clientY;
-            isSwiping = false;
+            if (isGameOver) { resetGame(); return; }
+            touchStartY = e.touches[0].clientY; isSwiping = false;
+            e.preventDefault(); // 防止畫面跟著點擊抖動
         }, { passive: false });
-
-        window.addEventListener('touchmove', (e) => {
+        
+        canvas.addEventListener('touchmove', (e) => {
             if (isGameOver) return;
-            let touchCurrentY = e.touches[0].clientY;
-            
-            if (touchCurrentY - touchStartY > 30) {
-                mario.isDucking = true;
-                isSwiping = true;
-                e.preventDefault();
-            }
+            if (e.touches[0].clientY - touchStartY > 30) { mario.isDucking = true; isSwiping = true;}
+            e.preventDefault();
         }, { passive: false });
-
-        window.addEventListener('touchend', (e) => {
-            if (mario.isDucking) {
-                mario.isDucking = false;
-            } else if (!isSwiping && !isGameOver) {
-                mario.jump();
-            }
+        
+        canvas.addEventListener('touchend', (e) => {
+            if (mario.isDucking) mario.isDucking = false; else if (!isSwiping && !isGameOver) mario.jump();
+            e.preventDefault();
         });
 
-        // 開始遊戲
+        incrementGlobalPlayCount();
         animate();
     </script>
 </body>
