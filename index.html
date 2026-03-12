@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>馬力歐大逃亡</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #87CEEB; /* 馬力歐藍天背景色 */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+        #gameCanvas {
+            background-color: #FFF8DC; /* 畫布背景色 (米色) */
+            border: 4px solid #8B4513; /* 棕色邊框 */
+            border-radius: 10px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .instructions {
+            margin-top: 15px;
+            color: #5c3a21;
+            text-align: center;
+        }
+        kbd {
+            background-color: #eee;
+            border-radius: 3px;
+            border: 1px solid #b4b4b4;
+            box-shadow: 0 1px 1px rgba(0,0,0,.2), 0 2px 0 0 rgba(255,255,255,.7) inset;
+            color: #333;
+            display: inline-block;
+            font-size: 0.85em;
+            font-weight: 700;
+            line-height: 1;
+            padding: 2px 4px;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="800" height="250"></canvas>
+    
+    <div class="instructions">
+        <h2>馬力歐大逃亡</h2>
+        <p>按 <kbd>空白鍵</kbd> 或 <kbd>↑</kbd> 跳躍躲避綠色水管</p>
+        <p>按住 <kbd>↓</kbd> 下蹲躲避飛行的砲彈</p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // 遊戲核心變數
+        let score = 0;
+        let gameSpeed = 5;
+        let isGameOver = false;
+        let frameCount = 0;
+        let obstacles = [];
+        const groundY = 200; // 地面高度
+
+        // 馬力歐 12x16 像素陣列 (R:紅, B:棕, S:膚色, U:藍色吊帶褲)
+        const marioSprite = [
+            "   RRRRR    ",
+            "  RRRRRRRRR ",
+            "  BBBSBS    ",
+            " BSBSBBSBSSS",
+            " BSBSBBBSBSS",
+            " BBSBBBB    ",
+            "   SSSSSSS  ",
+            "  BBRUURBB  ",
+            " BBBRUURBBB ",
+            "BBBBURRUBBBB",
+            "SS BBUUBB SS",
+            "SSS UUUU SSS",
+            "SS UUUUUU SS",
+            "   UU  UU   ",
+            "  BBB  BBB  ",
+            " BBBB  BBBB "
+        ];
+        const pixelSize = 3; // 每個像素放大的倍數
+
+        // 主角：馬力歐
+        const mario = {
+            x: 80,
+            y: groundY,
+            width: 12 * pixelSize,  // 36
+            height: 16 * pixelSize, // 48
+            dy: 0,
+            gravity: 0.6,
+            jumpForce: -11,
+            isDucking: false,
+            
+            draw() {
+                ctx.save();
+                
+                // 處理下蹲時的變形 (高度壓扁一半)
+                if (this.isDucking) {
+                    ctx.translate(this.x, this.y);
+                    ctx.scale(1, 0.5); 
+                    ctx.translate(-this.x, -this.y);
+                }
+
+                // 繪製像素馬力歐
+                for (let r = 0; r < marioSprite.length; r++) {
+                    for (let c = 0; c < marioSprite[r].length; c++) {
+                        let char = marioSprite[r][c];
+                        if (char !== ' ') {
+                            switch(char) {
+                                case 'R': ctx.fillStyle = '#e52521'; break; // 馬力歐紅
+                                case 'B': ctx.fillStyle = '#6b4c1a'; break; // 頭髮/鞋子棕
+                                case 'S': ctx.fillStyle = '#fcae68'; break; // 膚色
+                                case 'U': ctx.fillStyle = '#004394'; break; // 吊帶褲藍
+                            }
+                            // 計算每個像素方塊的 X 與 Y 座標
+                            let pX = this.x + c * pixelSize;
+                            let pY = this.y - this.height + r * pixelSize;
+                            ctx.fillRect(pX, pY, pixelSize, pixelSize);
+                        }
+                    }
+                }
+                ctx.restore();
+            },
+            
+            update() {
+                // 套用重力
+                this.y += this.dy;
+                if (this.y + this.dy < groundY) {
+                    this.dy += this.gravity;
+                } else {
+                    this.dy = 0;
+                    this.y = groundY;
+                }
+            },
+            
+            jump() {
+                if (this.y === groundY && !this.isDucking) {
+                    this.dy = this.jumpForce;
+                }
+            }
+        };
+
+        // 障礙物類別
+        class Obstacle {
+            constructor(type) {
+                this.x = canvas.width;
+                this.type = type; // 'pipe' (地面水管) 或 'bulletbill' (空中砲彈)
+                this.markedForDeletion = false;
+                
+                if (this.type === 'pipe') {
+                    this.width = 40 + Math.random() * 20; // 水管寬度
+                    this.height = 30 + Math.random() * 20; // 水管高度
+                    this.y = groundY - this.height;
+                } else {
+                    this.width = 50;  // 砲彈固定寬度
+                    this.height = 25; // 砲彈固定高度
+                    this.y = groundY - 50; // 砲彈飛行高度
+                }
+            }
+            
+            update() {
+                this.x -= gameSpeed;
+                if (this.x + this.width < 0) this.markedForDeletion = true;
+            }
+            
+            draw() {
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 1;
+
+                if (this.type === 'pipe') {
+                    // 繪製綠色水管
+                    const pipeColorDark = '#006400'; // 暗綠色
+                    const pipeColorLight = '#228B22'; // 亮綠色
+                    const pipeLipHeight = 10;
+                    const pipeLipWidthOffset = 5;
+
+                    // 水管主體
+                    ctx.fillStyle = pipeColorDark;
+                    ctx.fillRect(this.x, this.y + pipeLipHeight, this.width, this.height - pipeLipHeight);
+                    ctx.strokeRect(this.x, this.y + pipeLipHeight, this.width, this.height - pipeLipHeight);
+
+                    // 水管邊緣
+                    ctx.fillStyle = pipeColorLight;
+                    ctx.fillRect(this.x - pipeLipWidthOffset, this.y, this.width + pipeLipWidthOffset * 2, pipeLipHeight);
+                    ctx.strokeRect(this.x - pipeLipWidthOffset, this.y, this.width + pipeLipWidthOffset * 2, pipeLipHeight);
+                } else if (this.type === 'bulletbill') {
+                    // 繪製砲彈刺客
+                    const bulletColor = '#000000';
+                    const bulletOutline = '#333333';
+
+                    // 砲彈主體
+                    ctx.fillStyle = bulletColor;
+                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                    ctx.strokeStyle = bulletOutline;
+                    ctx.strokeRect(this.x, this.y, this.width, this.height);
+
+                    // 繪製眼睛
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.beginPath();
+                    ctx.arc(this.x + this.width * 0.25, this.y + this.height * 0.4, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(this.x + this.width * 0.4, this.y + this.height * 0.4, 4, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // 繪製嘴巴
+                    ctx.fillStyle = '#FF0000';
+                    ctx.fillRect(this.x + this.width * 0.3, this.y + this.height * 0.65, this.width * 0.2, 3);
+                }
+            }
+        }
+
+        // 處理障礙物生成
+        function handleObstacles() {
+            if (frameCount % 100 === 0 || (frameCount % 120 === 0 && Math.random() > 0.5)) {
+                let type = Math.random() > 0.4 ? 'pipe' : 'bulletbill';
+                if (obstacles.length === 0 || canvas.width - obstacles[obstacles.length-1].x > 250) {
+                     obstacles.push(new Obstacle(type));
+                }
+            }
+
+            for (let i = 0; i < obstacles.length; i++) {
+                obstacles[i].update();
+                obstacles[i].draw();
+
+                // 矩形碰撞偵測 (AABB)
+                let mBox = {
+                    x: mario.x,
+                    // 下蹲時，馬力歐的碰撞高度會減半，Y軸也要跟著下降
+                    y: mario.isDucking ? mario.y - (mario.height / 2) : mario.y - mario.height,
+                    width: mario.width,
+                    height: mario.isDucking ? mario.height / 2 : mario.height
+                };
+                
+                let obsBox = {
+                    x: obstacles[i].x,
+                    y: obstacles[i].y,
+                    width: obstacles[i].width,
+                    height: obstacles[i].height
+                };
+
+                // 檢查是否重疊
+                if (mBox.x < obsBox.x + obsBox.width &&
+                    mBox.x + mBox.width > obsBox.x &&
+                    mBox.y < obsBox.y + obsBox.height &&
+                    mBox.y + mBox.height > obsBox.y) {
+                    isGameOver = true;
+                }
+            }
+            
+            obstacles = obstacles.filter(obs => !obs.markedForDeletion);
+        }
+
+        // 繪製背景元素
+        function drawBackground() {
+            // 繪製地面方塊
+            const blockSize = 20;
+            const numBlocks = Math.ceil(canvas.width / blockSize);
+            const groundColorMain = '#D2691E'; // 巧克力色
+            const groundColorLight = '#CD853F'; // 秘魯色
+            const groundColorDark = '#8B4513'; // 鞍棕色
+
+            for (let i = 0; i < numBlocks; i++) {
+                const x = i * blockSize;
+                // 繪製方塊圖案
+                ctx.fillStyle = groundColorMain;
+                ctx.fillRect(x, groundY, blockSize, blockSize);
+                ctx.fillStyle = groundColorLight;
+                ctx.fillRect(x + 2, groundY + 2, blockSize - 4, blockSize - 4);
+                ctx.fillStyle = groundColorDark;
+                ctx.fillRect(x + 4, groundY + 4, blockSize - 8, blockSize - 8);
+            }
+            
+            ctx.fillStyle = '#5c3a21';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'right';
+            ctx.fillText(`分數: ${Math.floor(score)}`, canvas.width - 20, 30);
+        }
+
+        // 遊戲主迴圈
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawBackground();
+            mario.update();
+            mario.draw();
+            handleObstacles();
+            
+            if (!isGameOver) {
+                score += 0.1;
+                gameSpeed = 5 + Math.floor(score / 50); 
+                frameCount++;
+                requestAnimationFrame(animate);
+            } else {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '30px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('遊戲結束！', canvas.width / 2, canvas.height / 2 - 20);
+                ctx.font = '20px Arial';
+                ctx.fillText(`最終分數: ${Math.floor(score)}`, canvas.width / 2, canvas.height / 2 + 20);
+                ctx.fillText('按 空白鍵 重新開始', canvas.width / 2, canvas.height / 2 + 60);
+            }
+        }
+
+        // 重置遊戲
+        function resetGame() {
+            score = 0;
+            gameSpeed = 5;
+            frameCount = 0;
+            obstacles = [];
+            isGameOver = false;
+            mario.y = groundY;
+            mario.dy = 0;
+            animate();
+        }
+
+        // 監聽鍵盤事件
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                if (isGameOver) {
+                    resetGame();
+                } else {
+                    mario.jump();
+                }
+                if(e.code === 'Space') e.preventDefault(); 
+            }
+            if (e.code === 'ArrowDown' && !isGameOver) {
+                mario.isDucking = true;
+                e.preventDefault();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowDown') {
+                mario.isDucking = false;
+            }
+        });
+
+        // 開始遊戲
+        animate();
+    </script>
+</body>
+</html>
